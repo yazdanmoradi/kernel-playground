@@ -1,3 +1,11 @@
+# Kernel Playground — M12 Submission
+
+This fork contains my project submission for **M12 — MAC Address Filter**.
+
+Project documentation: [README_M12.md](README_M12.md)
+
+---
+
 # Project Overview
 
 This repository provides tools and resources for customizing and building a Linux kernel with a focus on packet filtering using the Netfilter subsystem. It also includes scripts and configurations for setting up a testing environment within virtual machines.
