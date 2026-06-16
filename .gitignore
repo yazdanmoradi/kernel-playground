@@ -4,3 +4,13 @@ src/c/.output/*
 /.idea
 **/*.swp
 **/tags
+
+# Kernel module build outputs
+kernel/modules/*.ko
+kernel/modules/*.o
+kernel/modules/*.mod
+kernel/modules/*.mod.c
+kernel/modules/*.symvers
+kernel/modules/*.order
+kernel/modules/.*.cmd
+kernel/modules/.tmp_versions/

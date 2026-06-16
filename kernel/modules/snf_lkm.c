@@ -1,114 +1,102 @@
+/*
+ * M12 — MAC Address Filter
+ * Basic level: log the source MAC address of incoming frames.
+ */
+
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
+
 #include <linux/netfilter.h>
+#include <linux/netfilter_ipv4.h>
 #include <linux/netfilter_ipv6.h>
-#include <linux/ipv6.h>
-#include <linux/icmpv6.h>
-#include <net/netns/generic.h>
 
-static unsigned int lkm_net_id;
+#include <linux/skbuff.h>
+#include <linux/if_ether.h>
+#include <linux/netdevice.h>
+#include <linux/atomic.h>
 
-struct lkm_netns_data {
-	struct nf_hook_ops nf_hops;
+static atomic64_t packet_counter = ATOMIC64_INIT(0);
+
+static unsigned int mac_filter_hook(void *priv,
+                                    struct sk_buff *skb,
+                                    const struct nf_hook_state *state)
+{
+    struct ethhdr *eth;
+    unsigned long long count;
+
+    if (!skb)
+        return NF_ACCEPT;
+
+    if (!skb_mac_header_was_set(skb))
+        return NF_ACCEPT;
+
+    eth = eth_hdr(skb);
+    if (!eth)
+        return NF_ACCEPT;
+
+    count = atomic64_inc_return(&packet_counter);
+
+    pr_info("[M12-basic] packet=%llu interface=%s src_mac=%pM dst_mac=%pM\n",
+            count,
+            state->in ? state->in->name : "unknown",
+            eth->h_source,
+            eth->h_dest);
+
+    return NF_ACCEPT;
+}
+
+static struct nf_hook_ops nfho_ipv4 = {
+    .hook     = mac_filter_hook,
+    .hooknum  = NF_INET_PRE_ROUTING,
+    .pf       = PF_INET,
+    .priority = NF_IP_PRI_FIRST,
 };
 
-static unsigned int nf_callback(void *priv, struct sk_buff *skb,
-				const struct nf_hook_state *state)
-{
-	struct ipv6hdr *ip6h;
-
-	if (!skb || !pskb_may_pull(skb, sizeof(*ip6h))) {
-		printk("weird skb?! Drop it!\n");
-		return NF_DROP;
-	}
-
-	ip6h = ipv6_hdr(skb);
-	if (ip6h->nexthdr == IPPROTO_ICMPV6) {
-		printk("recevied ICMPv6 packet! Drop it!\n");
-		return NF_DROP;
-	}
-
-	return NF_ACCEPT;
-}
-
-static const struct nf_hook_ops lkm_nf_hook_ops_template = {
-	.hook		= nf_callback,		/* hook function */
-	.hooknum	= NF_INET_PRE_ROUTING,	/* received packets */
-	.pf		= PF_INET6,		/* IPv6 */
-	.priority 	= NF_IP6_PRI_FIRST,	/* max hook priority */
+static struct nf_hook_ops nfho_ipv6 = {
+    .hook     = mac_filter_hook,
+    .hooknum  = NF_INET_PRE_ROUTING,
+    .pf       = PF_INET6,
+    .priority = NF_IP6_PRI_FIRST,
 };
 
-static struct nf_hook_ops *lkm_nf_hook_ops(struct net *net)
+static int __init m12_init(void)
 {
-	struct lkm_netns_data *netns_data = net_generic(net, lkm_net_id);
+    int ret;
 
-	return &netns_data->nf_hops;
+    pr_info("[M12-basic] MAC Address Filter module loading\n");
+
+    ret = nf_register_net_hook(&init_net, &nfho_ipv4);
+    if (ret) {
+        pr_err("[M12-basic] failed to register IPv4 hook\n");
+        return ret;
+    }
+
+    ret = nf_register_net_hook(&init_net, &nfho_ipv6);
+    if (ret) {
+        pr_err("[M12-basic] failed to register IPv6 hook\n");
+        nf_unregister_net_hook(&init_net, &nfho_ipv4);
+        return ret;
+    }
+
+    pr_info("[M12-basic] IPv4 and IPv6 hooks registered successfully\n");
+
+    return 0;
 }
 
-static int __net_init netns_init(struct net *net)
+static void __exit m12_exit(void)
 {
-	struct nf_hook_ops *ops = lkm_nf_hook_ops(net);
-	int rc;
+    nf_unregister_net_hook(&init_net, &nfho_ipv4);
+    nf_unregister_net_hook(&init_net, &nfho_ipv6);
 
-	/* Technically, it isn't necessary because we can use the
-	 * lkm_nf_hook_ops_template directly. However, we demonstrate how to
-	 * allocate storage for each network namespace and initialize it,
-	 * primarily for documentation purposes.
-	 */
-	memcpy(ops, &lkm_nf_hook_ops_template, sizeof(*ops));
-
-	rc = nf_register_net_hook(net, ops);
-	if (rc) {
-		printk("cannot register netfilter hook\n");
-		return rc;
-	}
-
-	printk("netfilter hook registered\n");
-	return 0;
+    pr_info("[M12-basic] module unloaded, total packets logged=%lld\n",
+            atomic64_read(&packet_counter));
 }
 
-static void __net_exit netns_exit(struct net *net)
-{
-	struct nf_hook_ops *ops = lkm_nf_hook_ops(net);
-
-	nf_unregister_net_hook(net, ops);
-
-	printk("netfilter hook unregistered\n");
-}
-
-static struct pernet_operations lkm_netns_ops = {
-	.init = netns_init,
-	.exit = netns_exit,
-	.id = &lkm_net_id,
-	.size = sizeof(struct lkm_netns_data),
-};
-
-static int __init lkm_init(void)
-{
-	int rc;
-
-	rc = register_pernet_subsys(&lkm_netns_ops);
-	if (rc) {
-		printk("cannot register the pernet ops\n");
-		return rc;
-	}
-
-	printk("lkm netfilter module registered\n");
-	return 0;
-}
-
-static void __exit lkm_exit(void)
-{
-	unregister_pernet_subsys(&lkm_netns_ops);
-
-	printk("lkm netfilter module unregistered\n");
-}
-
-module_init(lkm_init);
-module_exit(lkm_exit);
+module_init(m12_init);
+module_exit(m12_exit);
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("Andrea Mayer");
-MODULE_DESCRIPTION("Simple Linux kernel Netfilter Module for dropping ICMPv6 ingress packets");
-MODULE_VERSION("1.0.0");
+MODULE_AUTHOR("Yazdan Moradi");
+MODULE_DESCRIPTION("M12 MAC Address Filter - Basic: log source MAC address of incoming frames");
+MODULE_VERSION("1.0");

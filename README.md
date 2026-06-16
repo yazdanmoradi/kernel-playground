@@ -56,3 +56,7 @@ This repository is designed to facilitate customizing the Linux kernel, building
 ---
 
 *For further assistance or questions, refer to the individual README files within each folder.*
+
+## M12 — MAC Address Filter
+
+Project documentation: [README_M12.md](README_M12.md)
